@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>12x12 PNG to Android vector XML</title>
+</head>
+<body>
+<h1>12x12 PNG to Android vector XML</h1>
+<p>Upload a 12x12 PNG. White pixels are the drawing, everything else (transparent or any other colour) is empty.</p>
+
+<p><input type="file" id="file" accept="image/png"></p>
+<p id="status">No file chosen.</p>
+
+<p><canvas id="preview" width="240" height="240"></canvas></p>
+
+<p>
+  Name: <input type="text" id="name" value="ic_px_icon">
+  Size: <input type="text" id="size" value="120" size="4">dp
+</p>
+
+<p><textarea id="output" rows="12" cols="90" readonly></textarea></p>
+<p>
+  <button id="copy" type="button">Copy XML</button>
+  <button id="download" type="button">Download XML</button>
+</p>
+
+<script>
+var GRID = 12;
+var lastPixels = null;
+
+// pixels: array of 12 rows, each a string of 12 chars, "X" for a drawn pixel.
+// Builds one path of rectangles in a 24x24 viewport (2 units per pixel),
+// vertical runs of identical horizontal runs are merged into one rectangle.
+function rowsToPath(rows) {
+  var runs = [];
+  for (var y = 0; y < GRID; y++) {
+    var x = 0;
+    while (x < GRID) {
+      if (rows[y].charAt(x) === "X") {
+        var start = x;
+        while (x < GRID && rows[y].charAt(x) === "X") x++;
+        runs.push([start, x - start, y, 1]);
+      } else {
+        x++;
+      }
+    }
+  }
+  var merged = [];
+  for (var i = 0; i < runs.length; i++) {
+    var r = runs[i];
+    var joined = false;
+    for (var j = 0; j < merged.length; j++) {
+      var m = merged[j];
+      if (m[0] === r[0] && m[1] === r[1] && m[2] + m[3] === r[2]) {
+        m[3]++;
+        joined = true;
+        break;
+      }
+    }
+    if (!joined) merged.push(r);
+  }
+  var path = "";
+  for (var k = 0; k < merged.length; k++) {
+    var q = merged[k];
+    path += "M" + (q[0] * 2) + "," + (q[2] * 2) +
+            "h" + (q[1] * 2) + "v" + (q[3] * 2) + "h-" + (q[1] * 2) + "z";
+  }
+  return path;
+}
+
+function buildXml(rows, size) {
+  return '<vector xmlns:android="http://schemas.android.com/apk/res/android" ' +
+    'android:height="' + size + 'dp" android:viewportHeight="24" android:viewportWidth="24" android:width="' + size + 'dp">\n' +
+    '    <path android:fillColor="?attr/colorOnSurface" android:pathData="' + rowsToPath(rows) + '"/>\n' +
+    '</vector>\n';
+}
+
+function isWhite(r, g, b, a) {
+  return a >= 128 && r >= 200 && g >= 200 && b >= 200;
+}
+
+function refresh() {
+  if (!lastPixels) return;
+  var size = parseInt(document.getElementById("size").value, 10);
+  if (!(size > 0)) size = 120;
+  document.getElementById("output").value = buildXml(lastPixels, size);
+}
+
+function drawPreview(rows) {
+  var canvas = document.getElementById("preview");
+  var ctx = canvas.getContext("2d");
+  var cell = canvas.width / GRID;
+  ctx.fillStyle = "#1c1b1f";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#e6e1e5";
+  for (var y = 0; y < GRID; y++) {
+    for (var x = 0; x < GRID; x++) {
+      if (rows[y].charAt(x) === "X") ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+}
+
+function handleImage(img) {
+  var status = document.getElementById("status");
+  if (img.width !== GRID || img.height !== GRID) {
+    status.textContent = "The image is " + img.width + "x" + img.height + ", it must be exactly 12x12.";
+    lastPixels = null;
+    document.getElementById("output").value = "";
+    return;
+  }
+  var canvas = document.createElement("canvas");
+  canvas.width = GRID;
+  canvas.height = GRID;
+  var ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  var data = ctx.getImageData(0, 0, GRID, GRID).data;
+  var rows = [];
+  var white = 0;
+  var other = 0;
+  for (var y = 0; y < GRID; y++) {
+    var row = "";
+    for (var x = 0; x < GRID; x++) {
+      var i = (y * GRID + x) * 4;
+      if (isWhite(data[i], data[i + 1], data[i + 2], data[i + 3])) {
+        row += "X";
+        white++;
+      } else {
+        row += ".";
+        if (data[i + 3] >= 128) other++;
+      }
+    }
+    rows.push(row);
+  }
+  lastPixels = rows;
+  var text = white + " white pixels used.";
+  if (other > 0) text += " " + other + " opaque non-white pixels were ignored.";
+  if (white === 0) text = "No white pixels found, the drawing must be white.";
+  status.textContent = text;
+  drawPreview(rows);
+  refresh();
+}
+
+document.getElementById("file").addEventListener("change", function (event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var url = URL.createObjectURL(file);
+  var img = new Image();
+  img.onload = function () {
+    handleImage(img);
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = function () {
+    document.getElementById("status").textContent = "That file could not be read as an image.";
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+});
+
+document.getElementById("size").addEventListener("input", refresh);
+
+document.getElementById("copy").addEventListener("click", function () {
+  var box = document.getElementById("output");
+  if (!box.value) return;
+  box.select();
+  if (navigator.clipboard) navigator.clipboard.writeText(box.value);
+  else document.execCommand("copy");
+});
+
+document.getElementById("download").addEventListener("click", function () {
+  var text = document.getElementById("output").value;
+  if (!text) return;
+  var name = document.getElementById("name").value.trim() || "ic_px_icon";
+  var link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([text], { type: "text/xml" }));
+  link.download = name + ".xml";
+  link.click();
+  URL.revokeObjectURL(link.href);
+});
+</script>
+</body>
+</html>
